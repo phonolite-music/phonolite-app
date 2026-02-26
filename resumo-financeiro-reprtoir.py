@@ -28,7 +28,6 @@ def classify(row):
 if uploaded_file:
     df = pd.read_excel(uploaded_file)
 
-    # De/para Name → Payer via incomes file
     payer_map = {}
     if incomes_file:
         df_incomes = pd.read_excel(incomes_file)
@@ -62,63 +61,72 @@ if uploaded_file:
     df_display["Valor"] = df_display["Valor"].map(lambda x: f"R$ {x:,.2f}")
     st.dataframe(df_display, use_container_width=True, hide_index=True)
 
+    # --- RESUMO EM TELA ---
+    st.subheader("Resumo por Fonte e Categoria")
+
+    df_resumo_tela = df_resumo.copy()
+    df_resumo_tela["Fonte"] = df_resumo_tela["Fonte"].replace("", "(vazio)").fillna("(vazio)")
+    resumo_agrupado = (
+        df_resumo_tela.groupby(["Fonte", "Categoria"])["Valor"]
+        .sum()
+        .reset_index()
+        .sort_values(["Fonte", "Categoria"])
+    )
+
+    rows_tela = []
+    for fonte, grp in resumo_agrupado.groupby("Fonte"):
+        rows_tela.append({"Rótulos de Linha": fonte, "Soma de Valor": grp["Valor"].sum()})
+        for _, r in grp.iterrows():
+            rows_tela.append({"Rótulos de Linha": f"   {r['Categoria']}", "Soma de Valor": r["Valor"]})
+    rows_tela.append({"Rótulos de Linha": "Total Geral", "Soma de Valor": resumo_agrupado["Valor"].sum()})
+
+    df_resumo_display = pd.DataFrame(rows_tela)
+    df_resumo_display["Soma de Valor"] = df_resumo_display["Soma de Valor"].map(lambda x: f"R$ {x:,.2f}")
+    st.dataframe(df_resumo_display, use_container_width=True, hide_index=True)
+
     # --- EXPORT XLSX ---
-    # Resumo agregado por Categoria + Tipo (sem Nome)
-    group_cols = ["Período", "Categoria", "Tipo"] if periodo else ["Categoria", "Tipo"]
-    df_export = df_resumo.groupby(group_cols)["Valor"].sum().reset_index()
+    def write_sheet_plain(ws, df_data):
+        """Planilha1: cabeçalho azul escuro/branco bold, linhas pares verde claro, autofilter."""
+        df_sorted = df_data.sort_values("Nome") if "Nome" in df_data.columns else df_data
 
-    header_font = Font(bold=True, color="FFFFFF")
-    header_fill = PatternFill("solid", start_color="1F4E79")
-    center = Alignment(horizontal="center")
-    thin = Side(style="thin")
-    border = Border(left=thin, right=thin, top=thin, bottom=thin)
-    cat_colors = {
-        "Direitos Autorais – Fonomecânicos Digitais": "DDEEFF",
-        "Direitos Autorais – Licenciamento": "E8D5F5",
-        "Direitos Autorais – Sincronização": "FFE5CC",
-        "Repasses Editora - Provisão": "EEFFDD",
-        "Recuperação de Adiantamentos": "FFEECC",
-    }
+        header_font  = Font(bold=True, color="FFFFFF")
+        header_fill  = PatternFill("solid", start_color="1F4E79")
+        header_align = Alignment(horizontal="center", vertical="center")
+        thin         = Side(style="thin")
+        brd          = Border(left=thin, right=thin, top=thin, bottom=thin)
 
-    def write_sheet(ws, df_data):
-        headers = list(df_data.columns)
-        valor_col = headers.index("Valor") + 1
+        headers = list(df_sorted.columns)
         for col, h in enumerate(headers, 1):
             cell = ws.cell(row=1, column=col, value=h)
-            cell.font = header_font
-            cell.fill = header_fill
-            cell.alignment = center
-            cell.border = border
-        for row_idx, row in enumerate(df_data.itertuples(index=False), 2):
-            cat = row.Categoria
-            row_fill = PatternFill("solid", start_color=cat_colors.get(cat, "FFFFFF"))
+            cell.font      = header_font
+            cell.fill      = header_fill
+            cell.alignment = header_align
+            cell.border    = brd
+
+        for row_idx, row in enumerate(df_sorted.itertuples(index=False), 2):
             for col, val in enumerate(row, 1):
                 cell = ws.cell(row=row_idx, column=col, value=val)
-                cell.fill = row_fill
-                cell.border = border
-                if col == valor_col:
-                    cell.number_format = '#,##0.00'
+                cell.border = brd
+
+        ws.auto_filter.ref = ws.dimensions
         for col in ws.columns:
             max_len = max(len(str(c.value or "")) for c in col) + 4
             ws.column_dimensions[col[0].column_letter].width = min(max_len, 50)
 
     def write_resumo_sheet(ws, df_data):
-        """Escreve aba de resumo agrupado: Fonte → Categoria → subtotais → total geral."""
+        """Resumo agrupado: Fonte → Categoria → subtotais → total geral."""
         fonte_col_w = 40
-        val_col_w = 18
+        val_col_w   = 18
 
         bold_white = Font(bold=True, color="FFFFFF")
-        bold_dark  = Font(bold=True, color="1F4E79")
         bold_black = Font(bold=True)
         normal     = Font(bold=False)
 
-        fill_fonte  = PatternFill("solid", start_color="1F4E79")   # azul escuro — cabeçalho fonte
-        fill_subtot = PatternFill("solid", start_color="D9E1F2")   # azul claro — subtotal fonte
-        fill_total  = PatternFill("solid", start_color="BDD7EE")   # azul médio — total geral
-        no_fill     = PatternFill(fill_type=None)
+        fill_fonte = PatternFill("solid", start_color="1F4E79")
+        fill_total = PatternFill("solid", start_color="BDD7EE")
+        no_fill    = PatternFill(fill_type=None)
 
-        thin  = Side(style="thin")
-        thick = Side(style="medium")
+        thin = Side(style="thin")
 
         def border_row(left=thin, right=thin, top=thin, bottom=thin):
             return Border(left=left, right=right, top=top, bottom=bottom)
@@ -130,7 +138,6 @@ if uploaded_file:
         ws.column_dimensions["A"].width = fonte_col_w
         ws.column_dimensions["B"].width = val_col_w
 
-        # Cabeçalho
         for c, h in enumerate(["Rótulos de Linha", "Soma de Valor"], 1):
             cell = ws.cell(row=1, column=c, value=h)
             cell.font = bold_white
@@ -139,14 +146,13 @@ if uploaded_file:
             cell.border = border_row(left=Side(style="medium"), right=Side(style="medium"),
                                      top=Side(style="medium"), bottom=Side(style="medium"))
 
-        row_idx = 2
+        row_idx    = 2
         total_geral = 0.0
 
         for fonte, grp in grouped.groupby(level=0):
-            subtotal = grp.sum()
+            subtotal     = grp.sum()
             total_geral += subtotal
 
-            # Linha Fonte (negrito, fundo azul escuro)
             c1 = ws.cell(row=row_idx, column=1, value=fonte)
             c1.font = bold_white; c1.fill = fill_fonte
             c1.border = border_row(left=Side(style="medium"), right=thin,
@@ -158,7 +164,6 @@ if uploaded_file:
                                    top=Side(style="medium"), bottom=thin)
             row_idx += 1
 
-            # Linhas de categoria (indentadas)
             for (_, cat), val in grp.items():
                 c1 = ws.cell(row=row_idx, column=1, value=f"   {cat}")
                 c1.font = normal; c1.fill = no_fill
@@ -169,7 +174,6 @@ if uploaded_file:
                 c2.border = border_row(left=thin, right=Side(style="medium"))
                 row_idx += 1
 
-        # Total Geral
         c1 = ws.cell(row=row_idx, column=1, value="Total Geral")
         c1.font = bold_black; c1.fill = fill_total
         c1.border = border_row(left=Side(style="medium"), right=thin,
@@ -180,10 +184,10 @@ if uploaded_file:
         c2.border = border_row(left=thin, right=Side(style="medium"),
                                top=Side(style="medium"), bottom=Side(style="medium"))
 
-    wb = Workbook()
+    wb  = Workbook()
     ws1 = wb.active
     ws1.title = "Planilha1"
-    write_sheet(ws1, df_resumo)
+    write_sheet_plain(ws1, df_resumo)
 
     ws2 = wb.create_sheet("Resumo")
     write_resumo_sheet(ws2, df_resumo)
