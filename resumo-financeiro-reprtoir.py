@@ -5,7 +5,7 @@ import re
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
-st.title("Categorias Royalties")
+st.title("Categorias Financeiras")
 
 periodo = st.text_input("Período (AAAA-MM)", placeholder="2024-03")
 
@@ -203,4 +203,5 @@ if uploaded_file:
         file_name=fname,
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
+
 
