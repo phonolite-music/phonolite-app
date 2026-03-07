@@ -5,12 +5,16 @@ import re
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
-st.title("Categorias Financeiras")
+st.title("Processamento de Royalties")
 
 periodo = st.text_input("Período (AAAA-MM)", placeholder="2024-03")
 
 uploaded_file = st.file_uploader("Carregar arquivo de operações (.xlsx)", type=["xlsx"])
 incomes_file = st.file_uploader("Carregar lista de incomes (.xlsx)", type=["xlsx"])
+
+def strip_prefix(name):
+    """Remove prefixo do tipo '2026FEV SYNC - ' ou '2026FEV LICENCIAMENTO - ' para normalizar o nome."""
+    return re.sub(r'^\d{4}\w+\s+(SYNC|LICENCIAMENTO)\s+-\s+', '', str(name))
 
 def classify(row):
     rh = str(row["Rights-Holder"])
@@ -28,10 +32,12 @@ def classify(row):
 if uploaded_file:
     df = pd.read_excel(uploaded_file)
 
+    # Monta payer_map usando nome normalizado (sem prefixo SYNC/LICENCIAMENTO)
     payer_map = {}
     if incomes_file:
         df_incomes = pd.read_excel(incomes_file)
-        payer_map = df_incomes.set_index("Name")["Payer"].to_dict()
+        df_incomes["_base"] = df_incomes["Name"].apply(strip_prefix)
+        payer_map = df_incomes.drop_duplicates("_base").set_index("_base")["Payer"].to_dict()
 
     # --- MÉTRICAS GERAIS ---
     total = df["Amount"].sum()
@@ -53,7 +59,12 @@ if uploaded_file:
         .reset_index()
         .rename(columns={"Name": "Nome", "Type": "Tipo", "Amount": "Valor"})
     )
-    df_resumo["Fonte"] = df_resumo["Nome"].map(payer_map).fillna("")
+
+    # Mapeia Fonte via nome normalizado
+    df_resumo["_base"] = df_resumo["Nome"].apply(strip_prefix)
+    df_resumo["Fonte"] = df_resumo["_base"].map(payer_map).fillna("")
+    df_resumo.drop(columns=["_base"], inplace=True)
+
     if periodo:
         df_resumo.insert(0, "Período", periodo)
 
@@ -65,7 +76,7 @@ if uploaded_file:
     st.subheader("Resumo por Fonte e Categoria")
 
     df_resumo_tela = df_resumo.copy()
-    df_resumo_tela["Fonte"] = df_resumo_tela["Fonte"].replace("", "(vazio)").fillna("(vazio)")
+    df_resumo_tela["Fonte"] = df_resumo_tela["Fonte"].fillna("(vazio)").replace("", "(vazio)")
     resumo_agrupado = (
         df_resumo_tela.groupby(["Fonte", "Categoria"])["Valor"]
         .sum()
@@ -74,7 +85,8 @@ if uploaded_file:
     )
 
     rows_tela = []
-    for fonte, grp in resumo_agrupado.groupby("Fonte"):
+    for fonte in resumo_agrupado["Fonte"].unique():
+        grp = resumo_agrupado[resumo_agrupado["Fonte"] == fonte]
         rows_tela.append({"Rótulos de Linha": fonte, "Soma de Valor": grp["Valor"].sum()})
         for _, r in grp.iterrows():
             rows_tela.append({"Rótulos de Linha": f"   {r['Categoria']}", "Soma de Valor": r["Valor"]})
@@ -92,6 +104,7 @@ if uploaded_file:
         header_font  = Font(bold=True, color="FFFFFF")
         header_fill  = PatternFill("solid", start_color="1F4E79")
         header_align = Alignment(horizontal="center", vertical="center")
+        row_fill_alt = PatternFill("solid", start_color="E2EFDA")
         thin         = Side(style="thin")
         brd          = Border(left=thin, right=thin, top=thin, bottom=thin)
 
@@ -104,8 +117,10 @@ if uploaded_file:
             cell.border    = brd
 
         for row_idx, row in enumerate(df_sorted.itertuples(index=False), 2):
+            fill = row_fill_alt if row_idx % 2 == 0 else PatternFill(fill_type=None)
             for col, val in enumerate(row, 1):
                 cell = ws.cell(row=row_idx, column=col, value=val)
+                cell.fill   = fill
                 cell.border = brd
 
         ws.auto_filter.ref = ws.dimensions
@@ -115,9 +130,6 @@ if uploaded_file:
 
     def write_resumo_sheet(ws, df_data):
         """Resumo agrupado: Fonte → Categoria → subtotais → total geral."""
-        fonte_col_w = 40
-        val_col_w   = 18
-
         bold_white = Font(bold=True, color="FFFFFF")
         bold_black = Font(bold=True)
         normal     = Font(bold=False)
@@ -132,11 +144,11 @@ if uploaded_file:
             return Border(left=left, right=right, top=top, bottom=bottom)
 
         df_r = df_data.copy()
-        df_r["Fonte"] = df_r["Fonte"].replace("", "(vazio)").fillna("(vazio)")
+        df_r["Fonte"] = df_r["Fonte"].fillna("(vazio)").replace("", "(vazio)")
         grouped = df_r.groupby(["Fonte", "Categoria"], sort=True)["Valor"].sum()
 
-        ws.column_dimensions["A"].width = fonte_col_w
-        ws.column_dimensions["B"].width = val_col_w
+        ws.column_dimensions["A"].width = 40
+        ws.column_dimensions["B"].width = 18
 
         for c, h in enumerate(["Rótulos de Linha", "Soma de Valor"], 1):
             cell = ws.cell(row=1, column=c, value=h)
@@ -146,7 +158,7 @@ if uploaded_file:
             cell.border = border_row(left=Side(style="medium"), right=Side(style="medium"),
                                      top=Side(style="medium"), bottom=Side(style="medium"))
 
-        row_idx    = 2
+        row_idx     = 2
         total_geral = 0.0
 
         for fonte, grp in grouped.groupby(level=0):
@@ -203,5 +215,3 @@ if uploaded_file:
         file_name=fname,
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
-
-
