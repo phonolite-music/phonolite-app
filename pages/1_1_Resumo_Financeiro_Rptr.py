@@ -38,6 +38,7 @@ def is_receita_phonolite(categoria):
 
 if uploaded_file:
     df = pd.read_excel(uploaded_file)
+    df.columns = df.columns.str.strip().str.removeprefix("Operation | ")
 
     # Recuperação de Adiantamentos é apenas uma referência para abater o valor
     # que entrou de uma fonte específica (ex.: ABRAMUS DIGITAL). Não é dinheiro
